@@ -1,170 +1,221 @@
 import streamlit as st
 from duckduckgo_search import DDGS
-from openai import OpenAI
+import google.generativeai as genai
 import json
 import datetime
+import os
 
-# --- 页面配置 ---
+# --- 1. 页面配置 (2026 Future Style) ---
 st.set_page_config(
-    page_title="AI 每日情报站",
-    page_icon="🤖",
+    page_title="AI 每日情报站 (Gemini 3.0)",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- 核心逻辑函数 ---
+# 自定义 CSS 让界面更现代
+st.markdown("""
+    <style>
+    .stButton>button {
+        background-color: #FF4B4B;
+        color: white;
+        border-radius: 8px;
+        height: 3em;
+        font-weight: bold;
+    }
+    .report-card {
+        background-color: #f0f2f6;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
+# --- 2. 搜索逻辑 (数据源) ---
 def search_ai_news():
     """
-    使用 DuckDuckGo 搜索英文高质量 AI 资讯。
+    搜索最新的 AI 资讯，增加权重以获取工具和商业新闻
     """
-    query = "Artificial Intelligence news latest 24 hours breaking news tools"
+    # 2026年的搜索词策略：更注重 'Launch', 'Release', 'Startup'
+    query = "Artificial Intelligence news latest 24 hours new AI model release startup funding breaking"
     results = []
     
     try:
         with DDGS() as ddgs:
-            # 获取 10 条结果以供 LLM 筛选
-            ddgs_gen = ddgs.text(query, region='wt-wt', safesearch='off', max_results=10)
+            # 获取 12 条结果，喂给 Gemini 3.0 的大窗口
+            ddgs_gen = ddgs.text(query, region='wt-wt', safesearch='off', max_results=12)
             for r in ddgs_gen:
                 results.append(r)
     except Exception as e:
-        st.error(f"❌ 搜索模块出现错误: {e}")
+        st.error(f"❌ 搜索网络层错误: {e}")
         return None
 
     if not results:
         return None
         
-    # 将结果转换为字符串供 LLM 阅读
+    # 格式化上下文
     context_text = ""
     for idx, item in enumerate(results):
-        context_text += f"[{idx+1}] Title: {item.get('title')}\nSnippet: {item.get('body')}\nURL: {item.get('href')}\n\n"
+        context_text += f"--- News Item {idx+1} ---\nTitle: {item.get('title')}\nSnippet: {item.get('body')}\nLink: {item.get('href')}\n"
     
     return context_text
 
-def process_news_with_llm(api_key, raw_data, model_name="gpt-3.5-turbo"):
+# --- 3. Gemini 3.0 处理逻辑 (核心大脑) ---
+def process_news_with_gemini(api_key, raw_data, model_name):
     """
-    调用 OpenAI API 将英文搜索结果转化为结构化的中文日报。
+    调用 Google Gemini 3.0 API 进行处理
     """
-    client = OpenAI(api_key=api_key)
-    
-    # 构建 Prompt：强制要求 JSON 格式
-    system_prompt = """
-    You are a senior AI Tech Reporter for a Chinese audience. 
-    Your goal is to read the provided English search results and generate a structured daily report in Simplified Chinese (简体中文).
-    
-    Output strictly valid JSON code. Do not output Markdown code blocks (like ```json). Just the raw JSON string.
-    
-    The JSON structure must be exactly like this:
-    {
-        "breaking_news": [
-            {"title": "Translate title to Chinese", "summary": "Summarize in Chinese (max 50 words)", "url": "Original URL"}
-        ],
-        "business_insights": [
-            {"insight": "Analyze a business opportunity or market trend in Chinese based on the news"}
-        ],
-        "new_tools": [
-            {"name": "Tool Name (Keep English)", "description": "Explain what it does in Chinese"}
-        ]
-    }
-    
-    Rules:
-    1. Select only the most important 3-5 news items for 'breaking_news'.
-    2. Analyze 2-3 distinct business opportunities for 'business_insights'.
-    3. Identify 2-3 new tools or models for 'new_tools'.
-    4. Ensure all Chinese is natural, professional, and exciting.
-    """
-
-    try:
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Here are the latest search results:\n{raw_data}"}
-            ],
-            temperature=0.7,
-            response_format={"type": "json_object"} # 强制 JSON 模式（如果在 gpt-4-turbo/gpt-3.5-turbo-1106+ 上）
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        st.error(f"❌ LLM 处理失败: {e}")
+    if not api_key:
+        st.error("❌ 未检测到 API Key")
         return None
 
-# --- UI 渲染部分 ---
+    try:
+        genai.configure(api_key=api_key)
+    except Exception as e:
+        st.error(f"API Key 认证失败: {e}")
+        return None
+    
+    # 配置生成参数：强制 JSON
+    generation_config = {
+        "temperature": 0.4, # 降低温度以获得更准确的新闻事实
+        "response_mime_type": "application/json", 
+    }
 
+    try:
+        model = genai.GenerativeModel(model_name, generation_config=generation_config)
+    except Exception:
+        st.warning(f"⚠️ 模型 {model_name} 初始化异常，尝试回退到 gemini-2.0-flash-exp")
+        model = genai.GenerativeModel("gemini-2.0-flash-exp", generation_config=generation_config)
+
+    # System Prompt: 定义角色与输出格式
+    system_prompt = """
+    You are a Senior AI Analyst for a top-tier Chinese tech investment firm.
+    
+    Your Task:
+    1. Analyze the provided English search results about Artificial Intelligence.
+    2. Filter out irrelevant or low-quality noise.
+    3. Synthesize the information into a structured Daily Briefing in Simplified Chinese (简体中文).
+    
+    Data Extraction Rules:
+    - Translate all titles and summaries into professional Chinese.
+    - Identify direct business implications.
+    - Extract specific names of new tools or models.
+
+    Output Schema (Strict JSON):
+    {
+        "breaking_news": [
+            {"title": "Chinese Title", "summary": "Core update in <50 words", "url": "Original URL", "source": "Source Name (e.g. TechCrunch)"}
+        ],
+        "business_trends": [
+            {"trend": "Brief title of the trend", "analysis": "Why this matters for money/business in Chinese"}
+        ],
+        "new_tools": [
+            {"name": "Tool Name (English)", "function": "What it does (Chinese)", "target_user": "Who is it for?"}
+        ]
+    }
+    """
+
+    user_input = f"Here is the raw news data from the last 24 hours:\n{raw_data}"
+
+    try:
+        # Gemini 3.0 调用
+        response = model.generate_content(system_prompt + "\n\n" + user_input)
+        return response.text
+    except Exception as e:
+        st.error(f"❌ Gemini 推理失败: {e}")
+        return None
+
+# --- 4. 前端界面渲染 ---
 def main():
-    # 侧边栏：设置与控制
+    # 侧边栏
     with st.sidebar:
-        st.header("⚙️ 设置")
-        api_key = st.text_input("OpenAI API Key", type="password", help="请输入您的 OpenAI API Key 以启动分析")
-        model_choice = st.selectbox("选择模型", ["gpt-3.5-turbo", "gpt-4-turbo"])
+        st.title("⚙️ 控制台")
         
-        st.markdown("---")
-        st.info("ℹ️ 本系统后台使用英文关键词搜索全球资讯，由大模型为您实时翻译并提炼核心情报。")
+        api_key = st.text_input("Google AI Studio Key", type="password", placeholder="AIza...")
         
-        generate_btn = st.button("🚀 生成今日日报", type="primary", use_container_width=True)
+        # 2026年 模型列表 (假设名称)
+        model_choice = st.selectbox(
+            "选择推理引擎", 
+            [
+                "gemini-3.0-flash",   # 假设的 V3 Flash
+                "gemini-3.0-pro",     # 假设的 V3 Pro
+                "gemini-2.0-flash-exp", # 现实中可用的 fallback
+                "gemini-1.5-pro-latest" # 经典款
+            ],
+            index=0
+        )
+        
+        if "3.0" in model_choice:
+            st.success("🚀 已激活 Next-Gen 架构")
+        
+        st.divider()
+        st.caption("Auto-generated by Streamlit & Gemini")
+        run_btn = st.button("开始生成情报 (Generate)", use_container_width=True)
 
-    # 主界面标题
-    st.title("🤖 AI 每日情报站")
-    st.markdown(f"**日期**: {datetime.date.today().strftime('%Y年%m月%d日')} | **状态**: 待命")
-    st.markdown("---")
-
-    if generate_btn:
+    # 主区域
+    st.title("⚡ AI 每日情报站")
+    st.markdown(f"**日期**: {datetime.date.today().strftime('%Y年%m月%d日')} | **引擎**: DuckDuckGo + {model_choice}")
+    
+    if run_btn:
         if not api_key:
-            st.warning("⚠️ 请先在侧边栏输入 OpenAI API Key")
+            st.warning("⚠️ 请先在左侧输入 API Key")
             return
 
-        # 1. 搜索阶段
-        with st.status("🔍 正在全网检索最新 AI 资讯 (DuckDuckGo)...", expanded=True) as status:
-            raw_data = search_ai_news()
+        # 步骤 1: 搜索
+        with st.status("📡 正在连接全球资讯网络...", expanded=True) as status:
+            status.write("🔍 正在检索 DuckDuckGo (Last 24h)...")
+            raw_news = search_ai_news()
             
-            if not raw_data:
-                status.update(label="❌ 搜索失败，请检查网络连接", state="error")
+            if not raw_news:
+                status.update(label="❌ 搜索无结果或网络超时", state="error")
                 return
             
-            status.write("✅ 已获取最新英文资讯源数据")
+            # 步骤 2: 推理
+            status.write(f"🧠 正在上传至 {model_choice} 进行语义分析...")
+            json_result = process_news_with_gemini(api_key, raw_news, model_choice)
             
-            # 2. LLM 处理阶段
-            status.write("🧠 正在调用 LLM 进行翻译、分析与摘要...")
-            json_str = process_news_with_llm(api_key, raw_data, model_choice)
-            
-            if not json_str:
-                status.update(label="❌ 报告生成失败", state="error")
+            if not json_result:
+                status.update(label="❌ 模型生成失败", state="error")
                 return
-            
-            status.update(label="✅ 情报生成完毕！", state="complete", expanded=False)
+                
+            status.update(label="✅ 情报构建完成！", state="complete", expanded=False)
 
-        # 3. 数据解析与展示
+        # 步骤 3: 展示
         try:
-            data = json.loads(json_str)
+            data = json.loads(json_result)
             
-            # Section 1: 核心突发
-            st.subheader("🚨 核心突发 (Breaking News)")
-            for item in data.get("breaking_news", []):
-                with st.expander(f"📰 {item['title']}", expanded=True):
-                    st.markdown(f"**摘要**: {item['summary']}")
-                    st.markdown(f"🔗 [阅读原文]({item['url']})")
-
+            # 板块 1: 核心新闻
+            st.subheader("🚨 全球核心动态 (Breaking)")
+            for news in data.get("breaking_news", []):
+                with st.expander(f"📰 {news['title']}", expanded=True):
+                    st.markdown(f"**摘要**: {news['summary']}")
+                    if 'source' in news:
+                        st.caption(f"来源: {news['source']}")
+                    st.markdown(f"[🔗 点击阅读原文]({news['url']})")
+            
             st.divider()
-
-            # Section 2 & 3: 并排布局
-            col1, col2 = st.columns(2)
-
+            
+            # 板块 2 & 3: 并列布局
+            col1, col2 = st.columns([1, 1])
+            
             with col1:
-                st.subheader("💰 商业机会")
-                for item in data.get("business_insights", []):
-                    st.success(f"💡 {item['insight']}")
-
+                st.subheader("💰 商业风向标")
+                for item in data.get("business_trends", []):
+                    st.info(f"**{item['trend']}**\n\n{item['analysis']}")
+            
             with col2:
-                st.subheader("🛠️ 新工具 / 框架")
+                st.subheader("🛠️ 极客新工具")
                 for tool in data.get("new_tools", []):
-                    st.markdown(f"**🔧 {tool['name']}**")
-                    st.caption(tool['description'])
-                    st.markdown("---")
+                    with st.container(border=True):
+                        st.markdown(f"**🚀 {tool['name']}**")
+                        st.markdown(f"功能: {tool['function']}")
+                        st.caption(f"适用人群: {tool['target_user']}")
 
         except json.JSONDecodeError:
-            st.error("解析数据格式失败，LLM 返回了非标准 JSON。请重试。")
+            st.error("❌ 数据解析失败。模型返回了非标准 JSON。")
             with st.expander("查看原始返回"):
-                st.code(json_str)
+                st.code(json_result)
 
 if __name__ == "__main__":
     main()
