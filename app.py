@@ -6,230 +6,190 @@ import datetime
 
 # --- 1. 页面配置 ---
 st.set_page_config(
-    page_title="AI 每日情报站 (修复版)",
-    page_icon="🛡️",
+    page_title="AI 每日情报站 (Gemini 3.0 旗舰版)",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# 自定义 CSS 美化
+# 2026 风格界面 CSS
 st.markdown("""
     <style>
     .stButton>button {
-        background-color: #FF4B4B;
+        background-color: #007BFF;
         color: white;
         border-radius: 8px;
         height: 3em;
         font-weight: bold;
     }
-    .status-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #f0f2f6;
-        margin-bottom: 1rem;
+    .metric-card {
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. 搜索逻辑 (Tavily 引擎) ---
+# --- 2. 搜索逻辑 (Tavily) ---
 def search_with_tavily(tavily_key, query):
-    """
-    使用 Tavily 搜索，这是专为 LLM 设计的搜索引擎
-    """
     if not tavily_key:
-        st.error("❌ 未检测到 Tavily API Key")
+        st.error("❌ 请输入 Tavily API Key")
         return None
-
     try:
-        # 初始化客户端
         tavily = TavilyClient(api_key=tavily_key)
-        
-        # 执行搜索
         response = tavily.search(
             query=query,
-            search_depth="basic",    # 改为 basic 以节省时间，稳定为主
+            search_depth="basic",
             topic="news",            
             days=1,                  
-            max_results=5            
+            max_results=6
         )
-        
         results = response.get("results", [])
-        if not results:
-            return None
+        if not results: return None
 
-        # 格式化上下文给 Gemini
-        context_text = ""
+        context = ""
         for idx, item in enumerate(results):
-            context_text += f"--- Source {idx+1} ---\nTitle: {item.get('title')}\nContent: {item.get('content')}\nURL: {item.get('url')}\n"
-        
-        return context_text
-
+            context += f"--- Source {idx+1} ---\nTitle: {item.get('title')}\nContent: {item.get('content')}\nURL: {item.get('url')}\n"
+        return context
     except Exception as e:
-        st.error(f"❌ Tavily 搜索接口报错: {e}")
+        st.error(f"Search Error: {e}")
         return None
 
-# --- 3. Gemini 处理逻辑 (核心分析) ---
+# --- 3. Gemini 3.0 处理逻辑 ---
 def process_news_with_gemini(google_key, raw_data, model_name):
-    """
-    调用 Google Gemini 进行深度分析
-    """
     if not google_key:
-        st.error("❌ 未检测到 Google API Key")
+        st.error("❌ 请输入 Google API Key")
         return None
 
     try:
         genai.configure(api_key=google_key)
         
-        # 配置：强制 JSON 输出
-        # 注意：只有 1.5 及以上版本才完美支持 response_mime_type
-        # 如果是旧版 gemini-pro，我们需要在 prompt 里更强硬地要求 JSON
+        # 2026年配置：Gemini 3.0 完美支持 JSON 模式
         generation_config = {
-            "temperature": 0.4,
+            "temperature": 0.3,
+            "response_mime_type": "application/json"
         }
-        
-        # 如果是 1.5 系列，开启原生 JSON 模式
-        if "1.5" in model_name:
-            generation_config["response_mime_type"] = "application/json"
 
         model = genai.GenerativeModel(model_name, generation_config=generation_config)
 
-        # Prompt: 专业的 AI 行业分析师角色
         system_prompt = """
-        You are a Senior AI Analyst. 
-        Analyze the provided search results and generate a structured Daily Briefing in Simplified Chinese (简体中文).
+        You are an elite AI Tech Analyst in 2026. 
+        Input: Raw search results about Artificial Intelligence.
+        Task: Create a structured Daily Briefing in Simplified Chinese (简体中文).
 
-        CRITICAL: Output MUST be valid JSON code. No Markdown code blocks (like ```json). Just the raw JSON string.
-
-        JSON Structure:
+        JSON Output Schema:
         {
             "breaking_news": [
-                {"title": "Chinese Title", "summary": "Detailed summary in Chinese", "url": "Source URL", "source_name": "Source Name"}
+                {"title": "CN Title", "summary": "Brief summary", "url": "URL", "source": "Source"}
             ],
-            "business_trends": [
-                {"trend": "Name of the trend", "analysis": "Business analysis in Chinese"}
+            "market_analysis": [
+                {"topic": "Trend Name", "insight": "Investment/Business insight"}
             ],
-            "new_tools": [
-                {"name": "Tool Name (English)", "function": "Function description in Chinese", "target_user": "Target User"}
+            "new_tech": [
+                {"name": "Tool/Model Name", "desc": "What it does", "verdict": "Why it matters in 2026"}
             ]
         }
         """
         
-        user_input = f"Here is the raw news data from Tavily:\n{raw_data}"
-        
-        response = model.generate_content(system_prompt + "\n\n" + user_input)
+        response = model.generate_content(system_prompt + "\n\nData:\n" + raw_data)
         return response.text
 
     except Exception as e:
-        # 捕获具体的 404 或 429 错误并显示给人话
-        error_msg = str(e)
-        if "404" in error_msg:
-            st.error(f"❌ 模型找不到 (404): {model_name}。请尝试在左侧切换为 'gemini-pro'。")
-        elif "429" in error_msg:
-            st.error("❌ 配额超限 (429): Google 暂时限制了你的免费调用。请稍后重试或切换模型。")
+        # 捕获具体的错误代码
+        err_msg = str(e)
+        if "404" in err_msg:
+            st.error(f"❌ 模型未找到 (404): {model_name}。可能该区域未开放或API Key权限不足。")
+        elif "429" in err_msg:
+            st.error(f"❌ 配额超限 (429): {model_name} 免费版调用过于频繁。")
         else:
-            st.error(f"❌ Gemini 推理报错: {e}")
+            st.error(f"❌ API 错误: {e}")
         return None
 
-# --- 4. 主界面逻辑 ---
+# --- 4. 主程序 ---
 def main():
-    # 侧边栏：配置中心
     with st.sidebar:
-        st.header("⚙️ API 配置中心")
+        st.header("⚙️ 2026 控制台")
         
-        st.markdown("### 1. Google Gemini")
-        google_api_key = st.text_input("Google API Key", type="password", placeholder="AIza...", key="google_key")
+        google_api_key = st.text_input("Google API Key", type="password", key="g_key")
+        tavily_api_key = st.text_input("Tavily API Key", type="password", key="t_key")
         
-        st.markdown("### 2. Tavily Search")
-        tavily_api_key = st.text_input("Tavily API Key", type="password", placeholder="tvly-...", key="tavily_key")
-
         st.divider()
         
-        st.markdown("### 3. 模型选择 (关键)")
-        # 这里使用了更稳健的模型名称列表
+        # 🟢 核心修正：使用 2026 年真实的可用模型列表
         model_choice = st.selectbox(
-            "选择推理模型", 
+            "选择 AI 引擎", 
             [
-                "gemini-1.5-flash-latest", # 推荐：最新稳定版 Flash
-                "gemini-1.5-pro-latest",   # 推荐：最新稳定版 Pro
-                "gemini-pro",              # 保底：1.0版 (绝对可用)
-                "gemini-1.5-flash"         # 旧写法 (备用)
+                "gemini-3-flash-preview",  # ⚡ 最快，2025.12发布
+                "gemini-3-pro-preview",    # 🧠 最强，2025.11发布
+                "gemini-2.5-flash",        # 🛡️ 稳定版 (2025年中发布)
+                "gemini-2.5-pro"           # 🛡️ 稳定版 Pro
             ],
             index=0,
-            help="如果报错 404，请选择 'gemini-pro' 试试"
+            help="Gemini 1.5 已于2025年退役，请使用 3.0 或 2.5 系列"
         )
         
-        run_btn = st.button("🚀 开始生成日报", use_container_width=True)
+        st.info(f"当前引擎: {model_choice}")
+        run_btn = st.button("🚀 生成简报", use_container_width=True)
 
-    # 主区域
-    st.title("🛡️ AI 每日情报站 (Tavily + 修复版)")
-    st.markdown(f"**日期**: {datetime.date.today().strftime('%Y年%m月%d日')} | **数据源**: Tavily API")
-    
+    st.title("🌌 AI 每日情报站 (Gen 3)")
+    st.caption(f"📅 日期: {datetime.date.today()} | 🔴 核心: Google Gemini 3.0")
+
     if run_btn:
         if not google_api_key or not tavily_api_key:
-            st.warning("⚠️ 请先在左侧填入两个 API Key")
+            st.warning("⚠️ 请完善 API Key 设置")
             return
 
-        # 状态 1: 搜索
-        with st.status("📡 正在连接 Tavily 网络...", expanded=True) as status:
-            status.write("🔍 正在检索全球 AI 资讯 (Last 24h)...")
-            
-            # 搜索词
-            query = "Artificial Intelligence news latest 24 hours new AI model release startup funding"
-            raw_news = search_with_tavily(tavily_api_key, query)
+        with st.status("🔗 正在链接全球资讯网...", expanded=True) as status:
+            # 1. 搜索
+            status.write("🔍 Tavily 正在检索最新 AI 动态...")
+            raw_news = search_with_tavily(tavily_api_key, "Artificial Intelligence news latest 24 hours Gemini 3.0 agentic workflows")
             
             if not raw_news:
-                status.update(label="❌ 搜索失败 (检查 Key 或 网络)", state="error")
+                status.update(label="❌ 搜索无结果", state="error")
                 return
             
-            status.write("✅ 已获取数据")
-            
-            # 状态 2: 分析
-            status.write(f"🧠 正在调用 {model_choice} 进行分析...")
+            # 2. 推理
+            status.write(f"⚡ 正在调用 {model_choice} 进行分析...")
             json_result = process_news_with_gemini(google_api_key, raw_news, model_choice)
             
             if not json_result:
-                status.update(label="❌ 报告生成中断", state="error")
+                status.update(label="❌ 生成失败", state="error")
                 return
                 
-            status.update(label="✅ 情报构建完成！", state="complete", expanded=False)
+            status.update(label="✅ 完成！", state="complete", expanded=False)
 
-        # 结果展示
+        # 3. 渲染
         try:
-            # 清洗可能存在的 Markdown 标记 (容错处理)
-            cleaned_json = json_result.replace("```json", "").replace("```", "").strip()
-            data = json.loads(cleaned_json)
+            data = json.loads(json_result)
             
-            # 板块 1: 核心新闻
-            st.subheader("🚨 全球核心动态")
-            for news in data.get("breaking_news", []):
-                with st.expander(f"📰 {news['title']}", expanded=True):
-                    st.markdown(f"**摘要**: {news['summary']}")
-                    if 'source_name' in news:
-                        st.caption(f"来源: {news['source_name']}")
-                    st.markdown(f"[🔗 点击阅读原文]({news['url']})")
+            # 布局优化
+            st.subheader("🚨 头条新闻 (Breaking)")
+            for item in data.get("breaking_news", []):
+                with st.expander(f"📰 {item['title']}", expanded=True):
+                    st.write(item['summary'])
+                    st.markdown(f"[阅读原文]({item['url']})")
             
             st.divider()
             
-            # 板块 2 & 3: 并列布局
-            col1, col2 = st.columns(2)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("📈 市场洞察")
+                for m in data.get("market_analysis", []):
+                    st.success(f"**{m['topic']}**\n\n{m['insight']}")
             
-            with col1:
-                st.subheader("💰 商业风向")
-                for item in data.get("business_trends", []):
-                    st.info(f"**{item['trend']}**\n\n{item['analysis']}")
-            
-            with col2:
-                st.subheader("🛠️ 新工具/模型")
-                for tool in data.get("new_tools", []):
+            with c2:
+                st.subheader("🛠️ 新技术栈")
+                for t in data.get("new_tech", []):
                     with st.container(border=True):
-                        st.markdown(f"**🚀 {tool['name']}**")
-                        st.markdown(f"功能: {tool['function']}")
-                        st.caption(f"适用: {tool['target_user']}")
+                        st.markdown(f"**{t['name']}**")
+                        st.caption(t['desc'])
+                        st.markdown(f"*{t['verdict']}*")
 
-        except json.JSONDecodeError:
-            st.error("数据解析异常。建议切换 'gemini-1.5-flash-latest' 模型重试。")
-            with st.expander("查看原始返回"):
-                st.text(json_result)
+        except Exception as e:
+            st.error("JSON 解析错误，请重试")
+            st.code(json_result)
 
 if __name__ == "__main__":
     main()
